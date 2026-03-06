@@ -1,0 +1,8 @@
+{
+  "name": "random-wisp-place",
+  "version": "0.1.0",
+  "tasks": {
+    "start": "deno run -A --unstable-kv main.ts",
+    "dev": "deno run -A --unstable-kv --watch main.ts"
+  }
+}
