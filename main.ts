@@ -2,6 +2,7 @@ const WISP_API    = Deno.env.get("WISP_API_URL") ?? "https://wisp.place";
 const HYDRANT_BIN = Deno.env.get("HYDRANT_BIN") ?? "hydrant";
 const PORT        = parseInt(Deno.env.get("PORT") ?? "8080");
 const KV_PATH     = Deno.env.get("KV_PATH") ?? "random-wisp-place.kv";
+const CURSOR      = Deno.env.get("CURSOR");
 
 const getFreePort = () => {
   const listener = Deno.listen({ port: 0 });
@@ -60,6 +61,8 @@ const resolveUrl = (site: SiteValue): string =>
   site.domainUrl ?? site.fallbackUrl;
 
 const kv = await Deno.openKv(KV_PATH);
+
+if (CURSOR) await kv.set(cursorKey(), parseInt(CURSOR));
 
 const allSites = async (): Promise<SiteValue[]> => {
   const entries: SiteValue[] = [];
