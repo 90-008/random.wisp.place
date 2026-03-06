@@ -216,7 +216,7 @@ Deno.serve({ port: PORT }, async (req) => {
 
   const site = await pickRandomReachable(await allSites());
   return site
-    ? Response.redirect(resolveUrl(site), 302)
+    ? new Response(JSON.stringify(site))
     : new Response("no sites discovered yet, try again later", { status: 503 });
 });
 console.log(`[?] listening on :${PORT}`);
