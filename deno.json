@@ -5,6 +5,6 @@
     "start": "deno run -A --unstable-kv main.ts",
     "dev": "deno run -A --unstable-kv --watch main.ts",
     "build": "deno run -A build.ts",
-    "deploy": "deno task build && npm create wisp -- deploy -y --spa --path ./dist --site random did:plc:dfl62fgb7wtjj3fcbb72naae"
+    "deploy": "npm create wisp -- deploy -y --spa --path ./dist --site random did:plc:dfl62fgb7wtjj3fcbb72naae"
   }
 }
