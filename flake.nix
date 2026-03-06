@@ -17,6 +17,7 @@
             default = pkgs.mkShell {
               packages = with pkgs; [
                 deno
+                nodejs
               ];
             };
           };
