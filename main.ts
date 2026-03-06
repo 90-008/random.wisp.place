@@ -203,21 +203,35 @@ const pickRandomReachable = async (sites: SiteValue[]): Promise<SiteValue | null
   return null;
 };
 
+const corsHeaders = {
+  headers: {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET",
+  }
+};
 Deno.serve({ port: PORT }, async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, ...corsHeaders });
+  }
+
   const { pathname } = new URL(req.url);
 
   if (pathname === "/health") {
     const sites = await allSites();
-    return Response.json({
+    const data = {
       total: sites.length,
       withDomain: sites.filter((s) => s.domainUrl).length,
-    });
+    };
+    return Response.json(data, corsHeaders);
   }
 
   const site = await pickRandomReachable(await allSites());
   return site
-    ? new Response(JSON.stringify(site))
-    : new Response("no sites discovered yet, try again later", { status: 503 });
+    ? Response.json(site, corsHeaders)
+    : new Response(
+        "no sites discovered yet, try again later",
+        { status: 503, ...corsHeaders },
+      );
 });
 console.log(`[?] listening on :${PORT}`);
 

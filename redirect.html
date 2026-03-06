@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>redirecting...</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #0d0d0d;
+      color: #aaa;
+    }
+    p {
+      font-size: 0.9rem;
+      letter-spacing: 0.05em;
+    }
+    .bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 2px;
+    }
+    .bar::after {
+      content: "";
+      position: absolute;
+      height: 2px;
+      width: 40%;
+      background: #aaa;
+      animation: bounce 1.4s ease-in-out infinite;
+    }
+    @keyframes bounce {
+      0%   { left: -40%; }
+      100% { left: 100%; }
+    }
+    .bar.done { display: none; }
+    .error { color: #c04; }
+    #link { display: none; font-size: 0.9rem; margin-top: 0.2rem; }
+    #link a { color: #666; text-decoration: none; }
+    #link a:hover { color: #aaa; }
+  </style>
+</head>
+<body>
+  <p id="msg">picking a random site for you (^w^)</p>
+  <p id="link"><a id="url" href="#"></a></p>
+  <div class="bar" id="bar"></div>
+  <script>
+    fetch("__API_URL__")
+      .then(r => {
+        if (r.status === 503) throw new Error("no sites discovered yet, try again later (_ _*)Zzz");
+        if (!r.ok) throw new Error(`server error (T_T): ${r.status}`);
+        return r.json();
+      })
+      .then(({ domainUrl, fallbackUrl }) => {
+        const href = domainUrl ?? fallbackUrl;
+        const a = document.getElementById("url");
+        a.href = href;
+        a.textContent = href;
+        const p = document.getElementById("msg");
+        p.textContent = "found website!! \\(^.^)/";
+        document.getElementById("link").style.display = "block";
+        document.getElementById("bar").classList.add("done");
+        window.location.href = href;
+      })
+      .catch((err) => {
+        const p = document.getElementById("msg");
+        p.textContent = err.message;
+        p.className = "error";
+        document.title = "uh oh :c";
+        document.getElementById("bar").classList.add("done");
+      });
+  </script>
+</body>
+</html>
