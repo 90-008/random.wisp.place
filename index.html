@@ -55,8 +55,10 @@
         if (!r.ok) throw new Error(`server error (T_T): ${r.status}`);
         return r.json();
       })
-      .then(({ domainUrl, fallbackUrl }) => {
-        const href = domainUrl ?? fallbackUrl;
+      .then(({ domains, fallbackUrl }) => {
+        domains = domains.map(d => `https://${d}`);
+        const preferred = domains.filter(d => !d.endsWith("wisp.place"));
+        const href = (preferred.length > 0 ? preferred : domains)[0] ?? fallbackUrl;
         const a = document.getElementById("url");
         a.href = href;
         a.textContent = href;
