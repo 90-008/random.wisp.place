@@ -14,18 +14,12 @@ const getFreePort = () => {
 const HYDRANT_PORT = getFreePort();
 const HYDRANT_URL  = `http://localhost:${HYDRANT_PORT}`;
 
-const FS_COLLECTION     = "place.wisp.fs";
-const DOMAIN_COLLECTION = "place.wisp.domain";
+const FS_COLLECTION = "place.wisp.fs";
 
 type SiteValue = {
   fallbackUrl: string;
-  domainUrl: string | null;
-};
-
-// secondary index: domain -> site key components
-type DomainIndexValue = {
-  did: string;
-  siteName: string;
+  domains: string[];
+  lastScanned: number;
 };
 
 type HydrantRecord  = {
@@ -41,45 +35,44 @@ type HydrantRecord  = {
 
 type HydrantEvent = HydrantRecord | { readonly type: "identity" | "account" };
 
-type DomainRegistered = {
-  readonly registered: true;
-  readonly type: "wisp" | "custom";
-  readonly domain: string;
-  readonly did: string;
-  readonly rkey: string | null;
-};
-
-type DomainStatus = DomainRegistered | { readonly registered: false };
-
 const siteKey  = (did: string, siteName: string) => ["sites", did, siteName] as const;
-const domainKey = (domain: string)               => ["domain_idx", domain] as const;
 const cursorKey = ()                             => ["cursor"] as const;
 
 const fallbackUrl = (did: string, siteName: string): string =>
   `https://sites.wisp.place/${did}/${siteName}`;
-const resolveUrl = (site: SiteValue): string =>
-  site.domainUrl ?? site.fallbackUrl;
+
+const resolveUrl = (site: SiteValue): string => {
+  if (site.domains.length > 0) {
+    return `https://${site.domains[Math.floor(Math.random() * site.domains.length)]}/`;
+  }
+  return site.fallbackUrl;
+};
 
 const kv = await Deno.openKv(KV_PATH);
 
 if (CURSOR) await kv.set(cursorKey(), parseInt(CURSOR));
 
-const allSites = async (): Promise<SiteValue[]> => {
-  const entries: SiteValue[] = [];
+const allSiteEntries = async (): Promise<Map<Deno.KvKey, SiteValue>> => {
+  const map = new Map<Deno.KvKey, SiteValue>();
   for await (const entry of kv.list<SiteValue>({ prefix: ["sites"] })) {
-    entries.push(entry.value);
+    map.set(entry.key, entry.value);
   }
-  return entries;
+  return map;
 };
 
-const queryDomainRegistered = async (domain: string): Promise<DomainStatus | null> => {
-  const url = new URL(`${WISP_API}/api/domain/registered`);
-  url.searchParams.set("domain", domain);
+const fetchSiteDomains = async (did: string, rkey: string): Promise<string[]> => {
+  const url = new URL(`${WISP_API}/xrpc/place.wisp.v2.site.getDomains`);
+  url.searchParams.set("did", did);
+  url.searchParams.set("rkey", rkey);
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-    return res.ok ? await res.json() as DomainStatus : null;
+    if (!res.ok) return [];
+    const data = await res.json() as { domains: Array<{ domain: string; kind: string; verified: boolean }> };
+    return data.domains
+      .filter((d) => d.verified)
+      .map((d) => d.domain);
   } catch {
-    return null;
+    return [];
   }
 };
 
@@ -96,58 +89,13 @@ const handleFsEvent = async (
     return;
   }
 
-  // preserve existing domainUrl on upsert
-  const existing = await kv.get<SiteValue>(key);
+  const domains = await fetchSiteDomains(did, rkey);
   await kv.set(key, {
     fallbackUrl: fallbackUrl(did, rkey),
-    domainUrl: existing.value?.domainUrl ?? null,
+    domains,
+    lastScanned: Date.now(),
   });
-  console.log(`[+] fs  ${action}  ${did}:${rkey}`);
-};
-
-const handleDomainEvent = async (
-  _did: string,
-  rkey: string,
-  action: "create" | "update" | "delete",
-): Promise<void> => {
-  // rkey is the subdomain label e.g. "alice" -> alice.wisp.place
-  const domain = `${rkey}.wisp.place`;
-  const dKey = domainKey(domain);
-
-  if (action === "delete") {
-    const idx = await kv.get<DomainIndexValue>(dKey);
-    if (idx.value) {
-      const sKey = siteKey(idx.value.did, idx.value.siteName);
-      const site = await kv.get<SiteValue>(sKey);
-      if (site.value) {
-        await kv.set(sKey, { ...site.value, domainUrl: null });
-      }
-    }
-    await kv.delete(dKey);
-    console.log(`[-] domain  ${domain}  unlinked`);
-    return;
-  }
-
-  const status = await queryDomainRegistered(domain);
-  if (!status?.registered || !status.rkey) {
-    console.warn(`[!] domain ${domain}: not registered, no site mapped, or api error`);
-    return;
-  }
-
-  const domainUrl = `https://${status.domain}/`;
-  const sKey = siteKey(status.did, status.rkey);
-
-  // update or pre-create the site row with the resolved domainUrl
-  const existing = await kv.get<SiteValue>(sKey);
-  await kv.atomic()
-    .set(sKey, {
-      fallbackUrl: existing.value?.fallbackUrl ?? fallbackUrl(status.did, status.rkey),
-      domainUrl,
-    })
-    .set(dKey, { did: status.did, siteName: status.rkey } satisfies DomainIndexValue)
-    .commit();
-
-  console.log(`[+] domain  ${domain}  -> ${status.did}:${status.rkey}  (${status.type})`);
+  console.log(`[+] fs  ${action}  ${did}:${rkey}  (${domains.length} domains)`);
 };
 
 const handleEvent = async (raw: string): Promise<void> => {
@@ -161,8 +109,6 @@ const handleEvent = async (raw: string): Promise<void> => {
 
   if (collection === FS_COLLECTION) {
     await handleFsEvent(did, rkey, action);
-  } else if (collection === DOMAIN_COLLECTION) {
-    await handleDomainEvent(did, rkey, action);
   }
 };
 
@@ -193,12 +139,30 @@ const isReachable = async (url: string): Promise<boolean> => {
 };
 
 const PROBE_BATCH = 10;
-const pickRandomReachable = async (sites: SiteValue[]): Promise<SiteValue | null> => {
-  const shuffled = [...sites].sort(() => Math.random() - 0.5);
-  for (let i = 0; i < shuffled.length; i += PROBE_BATCH) {
-    const batch = shuffled.slice(i, i + PROBE_BATCH);
+const STALE_MS = 60 * 60 * 1000; // 1 hour
+
+const refreshIfStale = async (entry: { key: Deno.KvKey; value: SiteValue }): Promise<SiteValue> => {
+  const { key, value } = entry;
+  if (Date.now() - value.lastScanned < STALE_MS) return value;
+
+  // extract did and siteName from key ["sites", did, siteName]
+  const did = key[1] as string;
+  const siteName = key[2] as string;
+  const domains = await fetchSiteDomains(did, siteName);
+  const updated: SiteValue = { ...value, domains, lastScanned: Date.now() };
+  await kv.set(key, updated);
+  return updated;
+};
+
+const pickRandomReachable = async (sites: Map<Deno.KvKey, SiteValue>): Promise<SiteValue | null> => {
+  const entries = [...sites.entries()].sort(() => Math.random() - 0.5);
+  for (let i = 0; i < entries.length; i += PROBE_BATCH) {
+    const batch = entries.slice(i, i + PROBE_BATCH);
     const results = await Promise.all(
-      batch.map(async (site) => ({ site, ok: await isReachable(resolveUrl(site)) }))
+      batch.map(async ([key, site]) => {
+        const refreshed = await refreshIfStale({ key, value: site });
+        return { site: refreshed, ok: await isReachable(resolveUrl(refreshed)) };
+      })
     );
     const found = results.find((r) => r.ok);
     if (found) return found.site;
@@ -220,15 +184,15 @@ Deno.serve({ port: PORT }, async (req) => {
   const { pathname } = new URL(req.url);
 
   if (pathname === "/health") {
-    const sites = await allSites();
+    const entries = await allSiteEntries();
     const data = {
-      total: sites.length,
-      withDomain: sites.filter((s) => s.domainUrl).length,
+      total: entries.size,
+      withDomain: [...entries.values()].filter((s) => s.domains.length > 0).length,
     };
     return Response.json(data, corsHeaders);
   }
 
-  const site = await pickRandomReachable(await allSites());
+  const site = await pickRandomReachable(await allSiteEntries());
   return site
     ? Response.json(site, corsHeaders)
     : new Response(
@@ -244,7 +208,7 @@ try {
   conf("API_PORT", `${HYDRANT_PORT}`);
   conf("ENABLE_CRAWLER", "true");
   conf("FILTER_SIGNALS", [FS_COLLECTION]);
-  conf("FILTER_COLLECTIONS", [FS_COLLECTION, DOMAIN_COLLECTION].join(","));
+  conf("FILTER_COLLECTIONS", [FS_COLLECTION].join(","));
   conf("PLC_URL", "https://plc.directory");
   conf("ENABLE_DEBUG", "true");
 
